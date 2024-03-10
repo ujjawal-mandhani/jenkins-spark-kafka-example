@@ -1,0 +1,133 @@
+version: '3.8'
+
+services:
+  spark-master:
+    build: ./spark-cluster
+    container_name: spark-master
+    ports:
+      - 9010:8080
+      - 1001:7077
+      - 1000:10000
+      - 1005:4041
+      - 1006:4040
+    volumes:
+      - ./spark-cluster/id_rsa:/root/.ssh/id_rsa
+      - ./spark-cluster/id_rsa.pub:/root/.ssh/id_rsa.pub
+      - ./spark-cluster/id_rsa.pub:/root/.ssh/authorized_keys
+      - ./spark-cluster/spark-jobs/:/home/
+    mem_limit: 3g
+    cpus: 0.5
+    mem_reservation: 512m
+    depends_on:
+      - spark-worker-1
+      - spark-worker-2
+    networks:
+      - kafka-network
+
+  spark-worker-1:
+    build: ./spark-cluster
+    container_name: spark-worker-1
+    restart: always
+    ports:
+      - 9044:8080
+      - 9055:7077
+      - 9066:10000
+    mem_limit: 3g
+    cpus: 0.5
+    mem_reservation: 512m
+    volumes:
+      - ./spark-cluster/spark-jobs/:/home/
+      - ./spark-cluster/id_rsa.pub:/root/.ssh/authorized_keys
+    networks:
+      - kafka-network
+
+  spark-worker-2:
+    build: ./spark-cluster
+    container_name: spark-worker-2
+    restart: always
+    mem_limit: 3g
+    cpus: 0.5
+    mem_reservation: 512m
+    ports:
+      - 9077:8080
+      - 9088:7077
+      - 9099:10000
+    volumes:
+      - ./spark-cluster/id_rsa.pub:/root/.ssh/authorized_keys
+      - ./spark-cluster/spark-jobs/:/home/
+    networks:
+      - kafka-network
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper
+    restart: unless-stopped
+    volumes:
+      - ./zookeeper-data:/var/lib/zookeeper/data:Z
+      - ./zookeeper-log:/var/lib/zookeeper/log:Z
+    environment:
+      ZOOKEEPER_CLIENT_PORT: '2181'
+      ZOOKEEPER_ADMIN_ENABLE_SERVER: 'false'
+    networks:
+      - kafka-network
+
+  kafka:
+    image: confluentinc/cp-kafka
+    restart: unless-stopped
+    volumes:
+      - ./kafka-data:/var/lib/kafka/data:Z
+    environment:
+      KAFKA_BROKER_ID: '0'
+      KAFKA_ZOOKEEPER_CONNECT: 'zookeeper:2181'
+      KAFKA_NUM_PARTITIONS: '12'
+      KAFKA_COMPRESSION_TYPE: 'gzip'
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: '1'
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: '1'
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: '1'
+      KAFKA_ADVERTISED_LISTENERS: 'PLAINTEXT://kafka:9092'
+      KAFKA_CONFLUENT_SUPPORT_METRICS_ENABLE: 'false'
+      KAFKA_JMX_PORT: '9091'
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+      KAFKA_AUTHORIZER_CLASS_NAME: 'kafka.security.authorizer.AclAuthorizer'
+      KAFKA_ALLOW_EVERYONE_IF_NO_ACL_FOUND: 'true'
+      JMX_PORT: 9999
+    networks:
+      - kafka-network
+
+  akhq:
+    image: tchiotludo/akhq:latest
+    restart: unless-stopped
+    environment:
+      AKHQ_CONFIGURATION: |
+        akhq:
+          connections:
+            docker-kafka-server:
+              properties:
+                bootstrap.servers: "kafka:9092"
+              schema-registry:
+                url: "http://schema-registry:8085"
+              connect:
+                - name: "connect"
+                  url: "http://host.docker.internal:8083"
+    networks:
+      - kafka-network
+    ports:
+      - 10018:8080
+
+  jenkins:
+    image: jenkins/jenkins
+    volumes:
+      - ./jenkins/data/jobs:/var/jenkins_home/jobs
+      - ./spark-cluster/id_rsa:/var/jenkins_home/.ssh/id_rsa
+      - ./spark-cluster/id_rsa.pub:/var/jenkins_home/.ssh/id_rsa.pub
+      - ./spark-cluster/id_rsa.pub:/var/jenkins_home/.ssh/authorized_keys
+      - ./spark-cluster/ssh_config:/etc/ssh/ssh_config
+      - ./spark-cluster/sshd_config:/etc/ssh/sshd_config
+    ports:
+      - 10801:8080
+      - 10802:50000
+    networks:
+      - kafka-network
+
+networks:
+  kafka-network:
+    driver: bridge
